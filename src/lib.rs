@@ -1,9 +1,16 @@
-use std::{any::{Any, TypeId}, collections::HashMap};
+use std::{
+    any::{Any, TypeId},
+    collections::HashMap,
+};
 
 #[derive(Default)]
 pub struct InitTree {
     initialized: HashMap<TypeId, Box<dyn Any>>,
-    uninitialized: Vec<(TypeId, Box<dyn Fn() -> Vec<TypeId>>, Box<dyn FnOnce(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>>)>,
+    uninitialized: Vec<(
+        TypeId,
+        Box<dyn Fn() -> Vec<TypeId>>,
+        Box<dyn FnOnce(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>>,
+    )>,
 }
 
 impl InitTree {
@@ -11,8 +18,12 @@ impl InitTree {
         Default::default()
     }
 
-    pub fn add<T: 'static +  Init>(&mut self) {
-        self.uninitialized.push((TypeId::of::<T>(), Box::new(T::deps_list), Box::new(|h| Box::new(T::init(h)))));
+    pub fn add<T: 'static + Init>(&mut self) {
+        self.uninitialized.push((
+            TypeId::of::<T>(),
+            Box::new(T::deps_list),
+            Box::new(|h| Box::new(T::init(h))),
+        ));
     }
 
     pub fn init(mut self) -> HashMap<TypeId, Box<dyn Any>> {
@@ -32,8 +43,7 @@ impl InitTree {
                 let new_value = new_init.2(&mut self.initialized);
                 self.initialized.insert(new_init.0, new_value);
                 initialized += 1;
-            }
-            else {
+            } else {
                 i += 1;
             }
         }
@@ -91,7 +101,6 @@ macro_rules! impl_init {
     };
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,8 +128,26 @@ mod tests {
         assert!(vals.contains_key(&TypeId::of::<InitA>()));
         assert!(vals.contains_key(&TypeId::of::<InitB>()));
         assert!(vals.contains_key(&TypeId::of::<InitC>()));
-        assert_eq!(vals.get(&TypeId::of::<InitA>()).unwrap().downcast_ref::<InitA>().unwrap(), &InitA);
-        assert_eq!(vals.get(&TypeId::of::<InitB>()).unwrap().downcast_ref::<InitB>().unwrap(), &InitB);
-        assert_eq!(vals.get(&TypeId::of::<InitC>()).unwrap().downcast_ref::<InitC>().unwrap(), &InitC);
+        assert_eq!(
+            vals.get(&TypeId::of::<InitA>())
+                .unwrap()
+                .downcast_ref::<InitA>()
+                .unwrap(),
+            &InitA
+        );
+        assert_eq!(
+            vals.get(&TypeId::of::<InitB>())
+                .unwrap()
+                .downcast_ref::<InitB>()
+                .unwrap(),
+            &InitB
+        );
+        assert_eq!(
+            vals.get(&TypeId::of::<InitC>())
+                .unwrap()
+                .downcast_ref::<InitC>()
+                .unwrap(),
+            &InitC
+        );
     }
 }
