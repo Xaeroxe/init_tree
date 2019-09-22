@@ -166,6 +166,10 @@ macro_rules! impl_init {
             }
 
             fn deep_deps_list(t: &mut Vec<TypeInitDef>) {
+                // TODO: Fix this. This will correctly detect circular dependencies, but has a false
+                // positive if a dependency is relied on in multiple layers of the dependency graph.
+                // If we can't detect circular dependencies then instead the end user gets a stack
+                // overflow.
                 if t.iter().filter(|t| t.id == TypeId::of::<Self>()).count() > 1 {
                     #[cfg(not(feature = "nightly"))]
                     {
