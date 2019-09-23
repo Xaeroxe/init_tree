@@ -2,7 +2,6 @@
 //! are dependent on handles from other singletons, the `InitTree` is the structure you need.
 //! After implementing the `Init` trait for all of your singleton types all you need to do is add
 //! them to the InitTree, and then call `.init()` to receive all of your initialized types.
-//!
 
 #![cfg_attr(feature = "nightly", feature(intrinsics))]
 
@@ -19,12 +18,14 @@ extern "rust-intrinsic" {
 #[cfg(feature = "nightly")]
 use itertools::join;
 
-/// A tree of types to initialize.
+//// A tree of types to initialize.
 #[derive(Default, Clone)]
 pub struct InitTree {
     uninitialized: Vec<TypeInitDef>,
 }
 
+/// Largely an implementation detail. However you may need to create one of these if you're manually
+/// implementing `Init`.
 #[derive(Clone)]
 pub struct TypeInitDef {
     id: TypeId,
@@ -33,6 +34,56 @@ pub struct TypeInitDef {
     init: &'static dyn Fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
     #[cfg(feature = "nightly")]
     name: &'static str,
+}
+
+impl TypeInitDef {
+    /// Creates a new instance of this type.
+    ///
+    /// # Arguments
+    ///
+    /// id: The TypeId for the type this will be able to construct.
+    ///
+    /// deps: A function returning the list of direct dependencies for the constructed type.
+    ///
+    /// deep_deps: A function which will populate an empty vector with all dependencies for the
+    /// constructed type. Called recursively on dependencies.
+    ///
+    /// init: A function that retrieves the needed dependencies from a HashMap, initializes the
+    /// type, and then returns the instance in a type erased `Box`.
+    ///
+    /// (nightly only) name: The name of the type this constructs. Usually populated with the
+    /// `type_name` intrinsic.
+    #[cfg(not(feature = "nightly"))]
+    pub fn new(
+        id: TypeId,
+        deps: &'static dyn Fn() -> Vec<TypeInitDef>,
+        deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>),
+        init: &'static dyn Fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
+    ) -> Self {
+        Self {
+            id,
+            deps,
+            deep_deps,
+            init,
+        }
+    }
+
+    #[cfg(feature = "nightly")]
+    pub fn new(
+        id: TypeId,
+        deps: &'static dyn Fn() -> Vec<TypeInitDef>,
+        deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>),
+        init: &'static dyn Fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
+        name: &'static str,
+    ) -> Self {
+        Self {
+            id,
+            deps,
+            deep_deps,
+            init,
+            name,
+        }
+    }
 }
 
 impl InitTree {
@@ -98,16 +149,21 @@ impl InitTree {
     }
 }
 
+/// A collection of all the structures after they've been initialized. Call `.take::<MyType>()` on
+/// this to obtain the newly initialized structure.
 #[derive(Default)]
 pub struct InitializedTree(HashMap<TypeId, Box<dyn Any>>);
 
 impl InitializedTree {
+    /// Removes the initialized structure from this tree and returns it.
     pub fn take<T: 'static>(&mut self) -> Option<T> {
         self.0
             .remove(&TypeId::of::<T>())
             .map(|v| *v.downcast::<T>().unwrap())
     }
 
+    /// Removes the initialized structure from this tree and returns it. Prefer `take()` if possible,
+    /// but this function is provided in case the type can't be determined at compile time.
     pub fn take_by_type_id(&mut self, t: &TypeId) -> Option<Box<dyn Any>> {
         self.0.remove(t)
     }
@@ -166,24 +222,6 @@ macro_rules! impl_init {
             }
 
             fn deep_deps_list(t: &mut Vec<TypeInitDef>) {
-                // TODO: Fix this. This will correctly detect circular dependencies, but has a false
-                // positive if a dependency is relied on in multiple layers of the dependency graph.
-                // If we can't detect circular dependencies then instead the end user gets a stack
-                // overflow.
-                if t.iter().filter(|t| t.id == TypeId::of::<Self>()).count() > 1 {
-                    #[cfg(not(feature = "nightly"))]
-                    {
-                        panic!("Circular InitTree dependency detected! If you need more info please use the nightly feature on the init_tree crate with a nightly compiler.")
-                    }
-                    #[cfg(feature = "nightly")]
-                    {
-                        let type_list = join(t
-                            .iter()
-                            .filter(|t| t.id != TypeId::of::<Self>())
-                            .map(|t| t.name), ", ");
-                        panic!("Circular InitTree dependency detected! {} has a circular dependency with one of [{}]", type_name::<Self>(), type_list);
-                    }
-                }
                 let direct_deps = <Self as Init>::deps_list();
                 for d in direct_deps {
                     t.push(d);
