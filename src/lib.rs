@@ -112,7 +112,7 @@ impl InitTree {
         self.uninitialized.sort_by_key(|t| t.id);
         self.uninitialized.dedup_by_key(|t| t.id);
         while self.init_cycle(&mut initialized) > 0 {}
-        if self.uninitialized.len() > 0 {
+        if self.uninitialized.is_empty() {
             #[cfg(not(feature = "nightly"))]
             {
                 panic!("Unable to resolve initialization tree. If you need more info please use the nightly feature on the init_tree crate with a nightly compiler.");
@@ -164,8 +164,8 @@ impl InitializedTree {
 
     /// Removes the initialized structure from this tree and returns it. Prefer `take()` if possible,
     /// but this function is provided in case the type can't be determined at compile time.
-    pub fn take_by_type_id(&mut self, t: &TypeId) -> Option<Box<dyn Any>> {
-        self.0.remove(t)
+    pub fn take_by_type_id(&mut self, t: TypeId) -> Option<Box<dyn Any>> {
+        self.0.remove(&t)
     }
 }
 
