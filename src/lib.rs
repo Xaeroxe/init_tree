@@ -10,12 +10,6 @@ use std::{
     collections::HashMap,
 };
 
-#[cfg(feature = "nightly")]
-extern "rust-intrinsic" {
-    fn type_name<T>() -> &'static str;
-}
-
-#[cfg(feature = "nightly")]
 use itertools::join;
 
 //// A tree of types to initialize.
@@ -32,7 +26,6 @@ pub struct TypeInitDef {
     deps: &'static dyn Fn() -> Vec<TypeInitDef>,
     deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>),
     init: &'static dyn Fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
-    #[cfg(feature = "nightly")]
     name: &'static str,
 }
 
@@ -53,22 +46,6 @@ impl TypeInitDef {
     ///
     /// (nightly only) name: The name of the type this constructs. Usually populated with the
     /// `type_name` intrinsic.
-    #[cfg(not(feature = "nightly"))]
-    pub fn new(
-        id: TypeId,
-        deps: &'static dyn Fn() -> Vec<TypeInitDef>,
-        deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>),
-        init: &'static dyn Fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
-    ) -> Self {
-        Self {
-            id,
-            deps,
-            deep_deps,
-            init,
-        }
-    }
-
-    #[cfg(feature = "nightly")]
     pub fn new(
         id: TypeId,
         deps: &'static dyn Fn() -> Vec<TypeInitDef>,
@@ -92,14 +69,7 @@ impl InitTree {
     }
 
     pub fn add<T: 'static + Init>(&mut self) {
-        self.uninitialized.push(TypeInitDef {
-            id: TypeId::of::<T>(),
-            deps: &T::deps_list,
-            deep_deps: &T::deep_deps_list,
-            init: &|h| Box::new(T::init(h)),
-            #[cfg(feature = "nightly")]
-            name: type_name::<T>(),
-        });
+        self.uninitialized.push(T::self_def());
         let mut deps = Vec::new();
         T::deep_deps_list(&mut deps);
         for t in deps {
@@ -113,18 +83,11 @@ impl InitTree {
         self.uninitialized.dedup_by_key(|t| t.id);
         while self.init_cycle(&mut initialized) > 0 {}
         if !self.uninitialized.is_empty() {
-            #[cfg(not(feature = "nightly"))]
-            {
-                panic!("Unable to resolve initialization tree. If you need more info please use the nightly feature on the init_tree crate with a nightly compiler.");
-            }
-            #[cfg(feature = "nightly")]
-            {
-                let type_list = join(self.uninitialized.iter().map(|t| t.name), ", ");
-                panic!(
-                    "Unable to resolve initialization tree. Locked on [{}]",
-                    type_list
-                );
-            }
+            let type_list = join(self.uninitialized.iter().map(|t| t.name), ", ");
+            panic!(
+                "Unable to resolve initialization tree. Locked on [{}]",
+                type_list
+            );
         }
         InitializedTree(initialized)
     }
@@ -171,13 +134,24 @@ impl InitializedTree {
 
 pub trait Init: Sized {
     fn init(initialized: &mut HashMap<TypeId, Box<dyn Any>>) -> Self;
+    fn self_def() -> TypeInitDef;
     fn deps_list() -> Vec<TypeInitDef>;
     fn deep_deps_list(t: &mut Vec<TypeInitDef>);
 }
 
-impl<T: Default> Init for T {
+impl<T: 'static +  Default> Init for T {
     fn init(_: &mut HashMap<TypeId, Box<dyn Any>>) -> Self {
         Default::default()
+    }
+
+    fn self_def() -> TypeInitDef {
+        TypeInitDef {
+            id: TypeId::of::<Self>(),
+            deps: &Self::deps_list,
+            deep_deps: &Self::deep_deps_list,
+            init: &|h| Box::new(Self::init(h)),
+            name: "<Unknown Type>", // Default type should never have name printed.
+        }
     }
 
     fn deps_list() -> Vec<TypeInitDef> {
@@ -210,14 +184,23 @@ macro_rules! impl_init {
                 ret
             }
 
+            fn self_def() -> TypeInitDef {
+                TypeInitDef {
+                    id: TypeId::of::<Self>(),
+                    deps: &Self::deps_list,
+                    deep_deps: &Self::deep_deps_list,
+                    init: &|h| Box::new(Self::init(h)),
+                    name: stringify!($t),
+                }
+            }
+
             fn deps_list() -> Vec<TypeInitDef> {
                 vec![$(TypeInitDef {
                     id: TypeId::of::<$arg_type>(),
                     deps: &<$arg_type as Init>::deps_list,
                     deep_deps: &<$arg_type as Init>::deep_deps_list,
                     init: &|h| Box::new(<$arg_type as Init>::init(h)),
-                    #[cfg(feature = "nightly")]
-                    name: type_name::<$arg_type>(),
+                    name: stringify!($arg_type),
                 },)*]
             }
 
