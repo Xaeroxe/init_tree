@@ -112,7 +112,7 @@ impl InitTree {
         self.uninitialized.sort_by_key(|t| t.id);
         self.uninitialized.dedup_by_key(|t| t.id);
         while self.init_cycle(&mut initialized) > 0 {}
-        if self.uninitialized.is_empty() {
+        if !self.uninitialized.is_empty() {
             #[cfg(not(feature = "nightly"))]
             {
                 panic!("Unable to resolve initialization tree. If you need more info please use the nightly feature on the init_tree crate with a nightly compiler.");
