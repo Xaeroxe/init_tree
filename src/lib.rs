@@ -12,7 +12,10 @@ use std::{
 
 use itertools::join;
 
-//// A tree of types to initialize.
+/// If your dependency tree goes beyond this many layers deep we'll refuse to initialize it.
+pub const MAX_TREE_DEPTH: u32 = 500;
+
+/// A tree of types to initialize.
 #[derive(Default, Clone)]
 pub struct InitTree {
     uninitialized: Vec<TypeInitDef>,
@@ -24,7 +27,7 @@ pub struct InitTree {
 pub struct TypeInitDef {
     id: TypeId,
     deps: &'static dyn Fn() -> Vec<TypeInitDef>,
-    deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>),
+    deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>, u32),
     init: &'static dyn Fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
     name: &'static str,
 }
@@ -49,7 +52,7 @@ impl TypeInitDef {
     pub fn new(
         id: TypeId,
         deps: &'static dyn Fn() -> Vec<TypeInitDef>,
-        deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>),
+        deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>, u32),
         init: &'static dyn Fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
         name: &'static str,
     ) -> Self {
@@ -71,7 +74,7 @@ impl InitTree {
     pub fn add<T: 'static + Init>(&mut self) {
         self.uninitialized.push(T::self_def());
         let mut deps = Vec::new();
-        T::deep_deps_list(&mut deps);
+        T::deep_deps_list(&mut deps, 0);
         for t in deps {
             self.uninitialized.push(t)
         }
@@ -83,10 +86,9 @@ impl InitTree {
         self.uninitialized.dedup_by_key(|t| t.id);
         while self.init_cycle(&mut initialized) > 0 {}
         if !self.uninitialized.is_empty() {
-            let type_list = join(self.uninitialized.iter().map(|t| t.name), ", ");
             panic!(
                 "Unable to resolve initialization tree. Locked on [{}]",
-                type_list
+                join(self.uninitialized.iter().map(|t| t.name), ", ")
             );
         }
         InitializedTree(initialized)
@@ -136,7 +138,7 @@ pub trait Init: Sized {
     fn init(initialized: &mut HashMap<TypeId, Box<dyn Any>>) -> Self;
     fn self_def() -> TypeInitDef;
     fn deps_list() -> Vec<TypeInitDef>;
-    fn deep_deps_list(t: &mut Vec<TypeInitDef>);
+    fn deep_deps_list(t: &mut Vec<TypeInitDef>, call_depth: u32);
 }
 
 impl<T: 'static +  Default> Init for T {
@@ -158,7 +160,7 @@ impl<T: 'static +  Default> Init for T {
         vec![]
     }
 
-    fn deep_deps_list(_t: &mut Vec<TypeInitDef>) {}
+    fn deep_deps_list(_t: &mut Vec<TypeInitDef>, _call_depth: u32) {}
 }
 
 #[macro_export]
@@ -204,13 +206,19 @@ macro_rules! impl_init {
                 },)*]
             }
 
-            fn deep_deps_list(t: &mut Vec<TypeInitDef>) {
+            fn deep_deps_list(t: &mut Vec<TypeInitDef>, call_depth: u32) {
+                if call_depth >= MAX_TREE_DEPTH {
+                    panic!(
+                        "Dependency tree too deep, this is usually due to a circular dependency. Current tree: [{}]",
+                        join(t.iter().map(|t| t.name), ", ")
+                    );
+                }
                 let direct_deps = <Self as Init>::deps_list();
                 for d in direct_deps {
                     t.push(d);
                 }
                 $(
-                    <$arg_type as Init>::deep_deps_list(t);
+                    <$arg_type as Init>::deep_deps_list(t, call_depth + 1);
                 )*
             }
         }
