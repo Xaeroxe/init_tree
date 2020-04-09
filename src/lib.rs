@@ -99,11 +99,7 @@ impl InitTree {
     
     pub fn add<T: 'static + Init>(&mut self) {
         self.uninitialized.push(T::self_def());
-        let mut deps = Vec::new();
-        T::deep_deps_list(&mut deps, 0);
-        for t in deps {
-            self.uninitialized.push(t)
-        }
+        T::deep_deps_list(&mut self.uninitialized, 0);
     }
 
     /// Initializes the tree, returning a fully initialized tree, and if caching is enabled, a
