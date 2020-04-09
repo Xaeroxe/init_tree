@@ -3,8 +3,6 @@
 //! After implementing the `Init` trait for all of your singleton types all you need to do is add
 //! them to the InitTree, and then call `.init()` to receive all of your initialized types.
 
-#![cfg_attr(feature = "nightly", feature(intrinsics))]
-
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
@@ -19,17 +17,17 @@ pub const MAX_TREE_DEPTH: u32 = 500;
 #[derive(Default, Clone)]
 pub struct InitTree {
     uninitialized: Vec<TypeInitDef>,
+    cache: Option<Vec<usize>>,
 }
 
 /// Largely an implementation detail. However you may need to create one of these if you're manually
 /// implementing `Init`.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct TypeInitDef {
-    id: TypeId,
-    deps: &'static dyn Fn() -> Vec<TypeInitDef>,
-    deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>, u32),
-    init: &'static dyn Fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
-    name: &'static str,
+    pub id: fn() -> TypeId,
+    pub deps: fn() -> &'static [TypeInitDef],
+    pub init: fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
+    pub name: &'static str,
 }
 
 impl TypeInitDef {
@@ -47,23 +45,25 @@ impl TypeInitDef {
     /// init: A function that retrieves the needed dependencies from a HashMap, initializes the
     /// type, and then returns the instance in a type erased `Box`.
     ///
-    /// (nightly only) name: The name of the type this constructs. Usually populated with the
-    /// `type_name` intrinsic.
+    /// name: The name of the type this constructs.
     pub fn new(
-        id: TypeId,
-        deps: &'static dyn Fn() -> Vec<TypeInitDef>,
-        deep_deps: &'static dyn Fn(&mut Vec<TypeInitDef>, u32),
-        init: &'static dyn Fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
+        id: fn() -> TypeId,
+        deps: fn() -> &'static [TypeInitDef],
+        init: fn(&mut HashMap<TypeId, Box<dyn Any>>) -> Box<dyn Any>,
         name: &'static str,
     ) -> Self {
         Self {
             id,
             deps,
-            deep_deps,
             init,
             name,
         }
     }
+}
+
+/// Here for use in macros. Returns a comma separated string of the type names in this iterator.
+pub fn get_type_names<'a>(defs: impl Iterator<Item=&'a TypeInitDef>) -> String {
+    join(defs.map(|d| d.name), ", ")
 }
 
 impl InitTree {
@@ -71,6 +71,32 @@ impl InitTree {
         Default::default()
     }
 
+    /// InitTree supports the use of a cache between initializations.
+    /// It's common for the initialization sequence to be identical between runs.
+    /// If you find that the process of discovering dependencies is slowing down
+    /// your initialization you can cache the results of this discovery to make future
+    /// initializations faster.
+    ///
+    /// One might for example serialize the cache to a file after initialization and load
+    /// it from that file when initializing in the future.
+    pub fn enable_caching(&mut self, enabled: bool) {
+        if enabled {
+            if self.cache == None {
+                self.cache = Some(Vec::new());
+            }
+        } else {
+            self.cache = None;
+        }
+    }
+
+    /// Loads a new cache in, returning the old one, if any.
+    /// This will automatically enable caching.
+    pub fn load_cache(&mut self, cache: Vec<usize>) -> Option<Vec<usize>> {
+        let prior = self.cache.take();
+        self.cache = Some(cache);
+        prior
+    }
+    
     pub fn add<T: 'static + Init>(&mut self) {
         self.uninitialized.push(T::self_def());
         let mut deps = Vec::new();
@@ -80,18 +106,46 @@ impl InitTree {
         }
     }
 
+    /// Initializes the tree, returning a fully initialized tree, and if caching is enabled, a
+    /// cache from this initialization.
     pub fn init(mut self) -> InitializedTree {
         let mut initialized = HashMap::new();
         self.uninitialized.sort_by_key(|t| t.id);
         self.uninitialized.dedup_by_key(|t| t.id);
-        while self.init_cycle(&mut initialized) > 0 {}
+        let mut cache_was_correct = self.cache.is_some();
+        if let Some(cache) = &mut self.cache {
+            // This cache may be invalid. So we're going to replace it
+            // with whatever we learn from this run.
+            let mut new_cache = Vec::new();
+            for i in cache.iter() {
+                if (self.uninitialized[*i].deps)()
+                    .iter()
+                    .all(|t| initialized.contains_key(&(t.id)()))
+                {
+                    let new_init = self.uninitialized.remove(*i);
+                    let new_value = (new_init.init)(&mut initialized);
+                    initialized.insert((new_init.id)(), new_value);
+                    new_cache.push(*i);
+                } else {
+                    cache_was_correct = false;
+                }
+            }
+            *cache = new_cache;
+        }
+        while self.init_cycle(&mut initialized) > 0 {
+            cache_was_correct = false;
+        }
         if !self.uninitialized.is_empty() {
             panic!(
                 "Unable to resolve initialization tree. Locked on [{}]",
-                join(self.uninitialized.iter().map(|t| t.name), ", ")
+                get_type_names(self.uninitialized.iter()) 
             );
         }
-        InitializedTree(initialized)
+        InitializedTree {
+            tree: initialized,
+            cache: self.cache,
+            cache_was_correct,
+        }
     }
 
     fn init_cycle(&mut self, initialized: &mut HashMap<TypeId, Box<dyn Any>>) -> u32 {
@@ -100,12 +154,15 @@ impl InitTree {
         while i < self.uninitialized.len() {
             if (self.uninitialized[i].deps)()
                 .iter()
-                .all(|t| initialized.contains_key(&t.id))
+                .all(|t| initialized.contains_key(&(t.id)()))
             {
                 let new_init = self.uninitialized.remove(i);
                 let new_value = (new_init.init)(initialized);
-                initialized.insert(new_init.id, new_value);
+                initialized.insert((new_init.id)(), new_value);
                 initialized_count += 1;
+                if let Some(cache) = &mut self.cache {
+                    cache.push(i);
+                }
             } else {
                 i += 1;
             }
@@ -117,12 +174,16 @@ impl InitTree {
 /// A collection of all the structures after they've been initialized. Call `.take::<MyType>()` on
 /// this to obtain the newly initialized structure.
 #[derive(Default)]
-pub struct InitializedTree(HashMap<TypeId, Box<dyn Any>>);
+pub struct InitializedTree {
+    tree: HashMap<TypeId, Box<dyn Any>>,
+    cache: Option<Vec<usize>>,
+    cache_was_correct: bool,
+}
 
 impl InitializedTree {
     /// Removes the initialized structure from this tree and returns it.
     pub fn take<T: 'static>(&mut self) -> Option<T> {
-        self.0
+        self.tree
             .remove(&TypeId::of::<T>())
             .map(|v| *v.downcast::<T>().unwrap())
     }
@@ -130,34 +191,43 @@ impl InitializedTree {
     /// Removes the initialized structure from this tree and returns it. Prefer `take()` if possible,
     /// but this function is provided in case the type can't be determined at compile time.
     pub fn take_by_type_id(&mut self, t: TypeId) -> Option<Box<dyn Any>> {
-        self.0.remove(&t)
+        self.tree.remove(&t)
+    }
+
+    /// Return the cache from this initialization.
+    pub fn take_cache(&mut self) -> Option<Vec<usize>> {
+        self.cache.take()
+    }
+
+    /// Returns true if the cache loaded in was completely correct.
+    pub fn cache_was_correct(&self) -> bool {
+       self.cache_was_correct 
     }
 }
 
 pub trait Init: Sized {
     fn init(initialized: &mut HashMap<TypeId, Box<dyn Any>>) -> Self;
     fn self_def() -> TypeInitDef;
-    fn deps_list() -> Vec<TypeInitDef>;
+    fn deps_list() -> &'static [TypeInitDef];
     fn deep_deps_list(t: &mut Vec<TypeInitDef>, call_depth: u32);
 }
 
-impl<T: 'static +  Default> Init for T {
+impl<T: 'static + Default> Init for T {
     fn init(_: &mut HashMap<TypeId, Box<dyn Any>>) -> Self {
         Default::default()
     }
 
     fn self_def() -> TypeInitDef {
         TypeInitDef {
-            id: TypeId::of::<Self>(),
-            deps: &Self::deps_list,
-            deep_deps: &Self::deep_deps_list,
-            init: &|h| Box::new(Self::init(h)),
+            id: TypeId::of::<Self>,
+            deps: Self::deps_list,
+            init: |h| Box::new(Self::init(h)),
             name: "<Unknown Type>", // Default type should never have name printed.
         }
     }
 
-    fn deps_list() -> Vec<TypeInitDef> {
-        vec![]
+    fn deps_list() -> &'static [TypeInitDef] {
+        &[]
     }
 
     fn deep_deps_list(_t: &mut Vec<TypeInitDef>, _call_depth: u32) {}
@@ -168,9 +238,9 @@ macro_rules! impl_init {
     ($t:ty; ($($arg:ident: &mut $arg_type:ty),*) $init:block) => {
         impl $crate::Init for $t
         {
-            fn init(initialized: &mut HashMap<TypeId, Box<dyn Any>>) -> Self {
+            fn init(initialized: &mut std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any>>) -> Self {
                 $(
-                    let mut $arg = initialized.remove(&TypeId::of::<$arg_type>()).unwrap();
+                    let mut $arg = initialized.remove(&std::any::TypeId::of::<$arg_type>()).unwrap();
                 )*
                 let ret;
                 {
@@ -181,44 +251,41 @@ macro_rules! impl_init {
                 }
 
                 $(
-                    initialized.insert(TypeId::of::<$arg_type>(), $arg);
+                    initialized.insert(std::any::TypeId::of::<$arg_type>(), $arg);
                 )*
                 ret
             }
 
-            fn self_def() -> TypeInitDef {
-                TypeInitDef {
-                    id: TypeId::of::<Self>(),
-                    deps: &Self::deps_list,
-                    deep_deps: &Self::deep_deps_list,
-                    init: &|h| Box::new(Self::init(h)),
+            fn self_def() -> $crate::TypeInitDef {
+                $crate::TypeInitDef {
+                    id: std::any::TypeId::of::<Self>,
+                    deps: Self::deps_list,
+                    init: |h| Box::new(Self::init(h)),
                     name: stringify!($t),
                 }
             }
 
-            fn deps_list() -> Vec<TypeInitDef> {
-                vec![$(TypeInitDef {
-                    id: TypeId::of::<$arg_type>(),
-                    deps: &<$arg_type as Init>::deps_list,
-                    deep_deps: &<$arg_type as Init>::deep_deps_list,
-                    init: &|h| Box::new(<$arg_type as Init>::init(h)),
+            #[allow(non_upper_case_globals)]
+            fn deps_list() -> &'static [$crate::TypeInitDef] {
+                $(const $arg: $crate::TypeInitDef = $crate::TypeInitDef {
+                    id: std::any::TypeId::of::<$arg_type>,
+                    deps: <$arg_type as $crate::Init>::deps_list,
+                    init: |h| Box::new(<$arg_type as $crate::Init>::init(h)),
                     name: stringify!($arg_type),
-                },)*]
+                };)*
+                &[$($arg,)*]
             }
 
-            fn deep_deps_list(t: &mut Vec<TypeInitDef>, call_depth: u32) {
-                if call_depth >= MAX_TREE_DEPTH {
+            fn deep_deps_list(t: &mut Vec<$crate::TypeInitDef>, call_depth: u32) {
+                if call_depth >= $crate::MAX_TREE_DEPTH {
                     panic!(
                         "Dependency tree too deep, this is usually due to a circular dependency. Current tree: [{}]",
-                        join(t.iter().map(|t| t.name), ", ")
+                        $crate::get_type_names(t.iter())
                     );
                 }
-                let direct_deps = <Self as Init>::deps_list();
-                for d in direct_deps {
-                    t.push(d);
-                }
+                t.extend(Self::deps_list().iter());
                 $(
-                    <$arg_type as Init>::deep_deps_list(t, call_depth + 1);
+                    <$arg_type as $crate::Init>::deep_deps_list(t, call_depth + 1);
                 )*
             }
         }
@@ -282,7 +349,7 @@ mod tests {
     fn test_basic_init() {
         let mut tree = InitTree::new();
         tree.add::<InitA>();
-        let mut vals = tree.init();
+        let mut vals= tree.init();
         assert_eq!(vals.take::<InitA>(), Some(InitA { b: 5, c: 7, d: 10 }));
         assert_eq!(vals.take::<InitB>(), Some(InitB));
         assert_eq!(vals.take::<InitC>(), Some(InitC));
@@ -361,5 +428,27 @@ mod tests {
         assert_eq!(initialized.take::<LevelTwoInit>(), Some(LevelTwoInit));
         assert_eq!(initialized.take::<LevelThreeInit>(), Some(LevelThreeInit));
         assert_eq!(initialized.take::<LevelFourInit>(), Some(LevelFourInit));
+    }
+
+    #[test]
+    fn test_caching() {
+        fn test_init() -> InitTree {
+            let mut tree = InitTree::new();
+            tree.add::<LevelFourInit>();
+            tree.add::<LevelThreeInit>();
+            tree.add::<LevelTwoInit>();
+            tree.add::<LevelOneInit>();
+            tree
+        }
+        let mut init = test_init();
+        init.enable_caching(true);
+        let mut initialized = init.init();
+        let cache = initialized.take_cache();
+        assert!(!initialized.cache_was_correct());
+        let mut init = test_init();
+        init.load_cache(cache.unwrap());
+        let mut initialized = init.init();
+        assert!(initialized.take_cache().is_some());
+        assert!(initialized.cache_was_correct());
     }
 }

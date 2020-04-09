@@ -8,3 +8,7 @@ edition = "2018"
 
 [dependencies]
 itertools = "0.8"
+
+[[bin]]
+name = "outside_crate_test"
+test = true
