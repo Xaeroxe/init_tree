@@ -3,6 +3,8 @@ name = "init_tree"
 version = "0.1.0"
 authors = ["Jacob Kiesel <kieseljake@gmail.com>"]
 edition = "2018"
+license = "MIT/Apache-2.0"
+description = "A library for initializing a series of singletons with dependencies on each other."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
