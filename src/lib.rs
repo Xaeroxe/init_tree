@@ -122,7 +122,7 @@ impl InitTree {
                     .iter()
                     .all(|t| initialized.contains_key(&(t.id)()))
                 {
-                    let new_init = self.uninitialized.remove(*i);
+                    let new_init = self.uninitialized.swap_remove(*i);
                     let new_value = (new_init.init)(&mut initialized);
                     initialized.insert((new_init.id)(), new_value);
                     new_cache.push(*i);
@@ -156,7 +156,7 @@ impl InitTree {
                 .iter()
                 .all(|t| initialized.contains_key(&(t.id)()))
             {
-                let new_init = self.uninitialized.remove(i);
+                let new_init = self.uninitialized.swap_remove(i);
                 let new_value = (new_init.init)(initialized);
                 initialized.insert((new_init.id)(), new_value);
                 initialized_count += 1;
