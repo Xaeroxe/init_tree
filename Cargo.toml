@@ -1,10 +1,12 @@
 [package]
 name = "init_tree"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Jacob Kiesel <kieseljake@gmail.com>"]
 edition = "2018"
 license = "MIT/Apache-2.0"
 description = "A library for initializing a series of singletons with dependencies on each other."
+documentation = "https://docs.rs/init_tree"
+repository = "https://github.com/Xaeroxe/init_tree"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
