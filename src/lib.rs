@@ -499,6 +499,13 @@ mod tests {
         LevelFourInit
     });
 
+    #[derive(PartialEq, Eq, Debug)]
+    struct SelfDep;
+
+    impl_init!(SelfDep; (_me: &mut SelfDep) {
+        SelfDep
+    });
+
     #[test]
     fn test_layers_with_shared_dep() {
         let mut tree = InitTree::new();
@@ -535,5 +542,20 @@ mod tests {
         let mut initialized = init.init();
         assert!(initialized.take_cache().is_some());
         assert!(initialized.cache_was_correct());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_self_referential_init() {
+        let mut tree = InitTree::new();
+        tree.add::<SelfDep>();
+        let mut init = tree.init();
+        assert_eq!(init.take::<SelfDep>(), Some(SelfDep));
+    }
+
+    #[test]
+    fn test_compile_fail() {
+        let t = trybuild::TestCases::new();
+        t.compile_fail("tests/ui/shouldnt_compile.rs");
     }
 }

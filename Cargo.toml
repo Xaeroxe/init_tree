@@ -14,6 +14,9 @@ repository = "https://github.com/Xaeroxe/init_tree"
 itertools = "0.8"
 serde = { version = "1.0", features = ["derive"], optional = true }
 
+[dev-dependencies]
+trybuild = "1.0"
+
 [features]
 cache = ["serde"]
 default = ["cache"]
