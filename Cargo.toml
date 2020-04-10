@@ -1,6 +1,6 @@
 [package]
 name = "init_tree"
-version = "0.1.3"
+version = "0.2.0"
 authors = ["Jacob Kiesel <kieseljake@gmail.com>"]
 edition = "2018"
 license = "MIT/Apache-2.0"
@@ -12,6 +12,11 @@ repository = "https://github.com/Xaeroxe/init_tree"
 
 [dependencies]
 itertools = "0.8"
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+cache = ["serde"]
+default = ["cache"]
 
 [[bin]]
 name = "outside_crate_test"
