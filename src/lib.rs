@@ -103,6 +103,9 @@ impl InitTree {
                 // with whatever we learn from this run.
                 let mut new_cache = Vec::new();
                 for i in cache.iter() {
+                    if self.uninitialized.len() < *i {
+                        continue;
+                    }
                     let mut new_init = self.uninitialized.swap_remove(*i);
                     if let Some(new_value) = (new_init.init)(&mut initialized) {
                         initialized.insert((new_init.id)(), RefCell::new(new_value));
@@ -506,14 +509,18 @@ mod tests {
         SelfDep
     });
 
-    #[test]
-    fn test_layers_with_shared_dep() {
+    fn test_init() -> InitTree {
         let mut tree = InitTree::new();
         tree.add::<LevelFourInit>();
         tree.add::<LevelThreeInit>();
         tree.add::<LevelTwoInit>();
         tree.add::<LevelOneInit>();
-        let mut initialized = tree.init();
+        tree
+    }
+
+    #[test]
+    fn test_layers_with_shared_dep() {
+        let mut initialized = test_init().init();
         assert_eq!(initialized.take::<CoreInit>(), Some(CoreInit));
         assert_eq!(initialized.take::<LevelOneInit>(), Some(LevelOneInit));
         assert_eq!(initialized.take::<LevelTwoInit>(), Some(LevelTwoInit));
@@ -524,14 +531,6 @@ mod tests {
     #[test]
     #[cfg(feature = "cache")]
     fn test_caching() {
-        fn test_init() -> InitTree {
-            let mut tree = InitTree::new();
-            tree.add::<LevelFourInit>();
-            tree.add::<LevelThreeInit>();
-            tree.add::<LevelTwoInit>();
-            tree.add::<LevelOneInit>();
-            tree
-        }
         let mut init = test_init();
         init.enable_caching(true);
         let mut initialized = init.init();
@@ -542,6 +541,20 @@ mod tests {
         let mut initialized = init.init();
         assert!(initialized.take_cache().is_some());
         assert!(initialized.cache_was_correct());
+    }
+
+    #[test]
+    #[cfg(feature = "cache")]
+    fn test_caching_with_invalid_indices() {
+        let mut init = test_init();
+        init.load_cache(Cache { inner: CacheVersion::V1(vec![usize::max_value(); 10])});
+        let mut initialized = init.init();
+        assert!(!initialized.cache_was_correct());
+        assert_eq!(initialized.take::<CoreInit>(), Some(CoreInit));
+        assert_eq!(initialized.take::<LevelOneInit>(), Some(LevelOneInit));
+        assert_eq!(initialized.take::<LevelTwoInit>(), Some(LevelTwoInit));
+        assert_eq!(initialized.take::<LevelThreeInit>(), Some(LevelThreeInit));
+        assert_eq!(initialized.take::<LevelFourInit>(), Some(LevelFourInit));
     }
 
     #[test]
