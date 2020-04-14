@@ -1,0 +1,23 @@
+error[E0277]: the trait bound `NoInit: std::default::Default` is not satisfied
+  --> $DIR/shouldnt_compile.rs:9:1
+   |
+9  | / impl_init!(NeedsNoInit; (_no_init: &mut NoInit) {
+10 | |     NeedsNoInit
+11 | | });
+   | |___^ the trait `std::default::Default` is not implemented for `NoInit`
+   |
+   = note: required because of the requirements on the impl of `init_tree::Init` for `NoInit`
+   = note: required by `init_tree::Init::deps_list`
+   = note: this error originates in a macro outside of the current crate (in Nightly builds, run with -Z external-macro-backtrace for more info)
+
+error[E0277]: the trait bound `NoInit: std::default::Default` is not satisfied
+  --> $DIR/shouldnt_compile.rs:9:1
+   |
+9  | / impl_init!(NeedsNoInit; (_no_init: &mut NoInit) {
+10 | |     NeedsNoInit
+11 | | });
+   | |___^ the trait `std::default::Default` is not implemented for `NoInit`
+   |
+   = note: required because of the requirements on the impl of `init_tree::Init` for `NoInit`
+   = note: required by `init_tree::Init::deep_deps_list`
+   = note: this error originates in a macro outside of the current crate (in Nightly builds, run with -Z external-macro-backtrace for more info)
