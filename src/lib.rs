@@ -103,7 +103,7 @@ impl InitTree {
                 // with whatever we learn from this run.
                 let mut new_cache = Vec::new();
                 for i in cache.iter() {
-                    if self.uninitialized.len() < *i {
+                    if self.uninitialized.len() <= *i {
                         continue;
                     }
                     let mut new_init = self.uninitialized.swap_remove(*i);
