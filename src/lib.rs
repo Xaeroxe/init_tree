@@ -545,9 +545,23 @@ mod tests {
 
     #[test]
     #[cfg(feature = "cache")]
-    fn test_caching_with_invalid_indices() {
+    fn test_caching_with_massive_indices() {
         let mut init = test_init();
         init.load_cache(Cache { inner: CacheVersion::V1(vec![usize::max_value(); 10])});
+        let mut initialized = init.init();
+        assert!(!initialized.cache_was_correct());
+        assert_eq!(initialized.take::<CoreInit>(), Some(CoreInit));
+        assert_eq!(initialized.take::<LevelOneInit>(), Some(LevelOneInit));
+        assert_eq!(initialized.take::<LevelTwoInit>(), Some(LevelTwoInit));
+        assert_eq!(initialized.take::<LevelThreeInit>(), Some(LevelThreeInit));
+        assert_eq!(initialized.take::<LevelFourInit>(), Some(LevelFourInit));
+    }
+
+    #[test]
+    #[cfg(feature = "cache")]
+    fn test_caching_with_indices_equal_to_len() {
+        let mut init = test_init();
+        init.load_cache(Cache { inner: CacheVersion::V1(vec![6; 10])});
         let mut initialized = init.init();
         assert!(!initialized.cache_was_correct());
         assert_eq!(initialized.take::<CoreInit>(), Some(CoreInit));
